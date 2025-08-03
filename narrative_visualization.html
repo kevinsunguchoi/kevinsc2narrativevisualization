@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Interactive Slideshow Narrative Visualization</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 0; }
+    #container { width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    svg { background-color: #f0f0f0; }
+    .annotation { font-size: 14px; fill: black; font-weight: bold; }
+    #tooltip {
+      position: absolute;
+      background: white;
+      border: 1px solid gray;
+      border-radius: 5px;
+      padding: 5px 10px;
+      pointer-events: none;
+      font-size: 12px;
+      box-shadow: 0px 2px 5px rgba(0,0,0,0.3);
+      display: none;
+    }
+    #controls { margin-top: 10px; }
+    button, select { padding: 10px 15px; margin: 0 5px; font-size: 14px; }
+  </style>
+</head>
+<body>
+<div id="container">
+  <h3>Tech Stocks During the Pandemic</h3>
+  <svg id="viz" width="800" height="500"></svg>
+  <div id="controls">
+    <button class="scene-button" data-scene="0">Pre-COVID (2019)</button>
+    <button class="scene-button" data-scene="1">COVID Crash (2020)</button>
+    <button class="scene-button" data-scene="2">Recovery (2019–2021)</button>
+    <select id="ticker-select">
+      <option value="ALL">All Companies</option>
+      <option value="AAPL">AAPL</option>
+      <option value="MSFT">MSFT</option>
+      <option value="AMZN">AMZN</option>
+      <option value="GOOGL">GOOGL</option>
+      <option value="TSLA">TSLA</option>
+    </select>
+  </div>
+</div>
+<div id="tooltip"></div>
+
+<script>
+  const svg = d3.select("#viz");
+  const tooltip = d3.select("#tooltip");
+  const width = +svg.attr("width");
+  const height = +svg.attr("height");
+
+  const margin = { top: 40, right: 80, bottom: 40, left: 70 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  let sceneData = [];
+  let currentSceneIndex = 0;
+  const tickers = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'TSLA'];
+  const colors = d3.scaleOrdinal(tickers, d3.schemeCategory10);
+
+  let selectedTicker = "ALL";
+
+  d3.select("#ticker-select").on("change", function () {
+    selectedTicker = this.value;
+    renderScene(currentSceneIndex);
+  });
+
+  function renderScene(index) {
+    g.selectAll("*").remove();
+
+    let allSceneData = [];
+    if (sceneData.length > 0) {
+      allSceneData = sceneData.reduce((acc, scene) => acc.concat(scene), []);
+    }
+
+    const parseDate = d3.timeParse("%Y-%m-%d");
+    allSceneData.forEach((d, i) => {
+      if (typeof d.Date === "string") {
+        const original = d.Date;
+        d.Date = parseDate(d.Date.split(" ")[0]);
+      }
+    });
+
+    const allValidDates = allSceneData.filter(d => d.Date instanceof Date && !isNaN(d.Date));
+    if (allValidDates.length === 0) {
+      g.append("text")
+        .attr("x", 10)
+        .attr("y", 30)
+        .text("No valid date values — check JSON date format.")
+        .attr("fill", "red")
+        .style("font-size", "16px");
+      return;
+    }
+
+    const sceneCutoffs = [
+      parseDate("2019-12-31"),
+      parseDate("2020-04-30"),
+      parseDate("2021-12-31")
+    ];
+
+    const cutoffDate = sceneCutoffs[index];
+    const filteredData = allValidDates.filter(d => d.Date <= cutoffDate);
+    const dataThrough2021 = allValidDates.filter(d => d.Date <= parseDate("2021-12-31"));
+
+    const x = d3.scaleTime()
+      .domain(d3.extent(dataThrough2021, d => d.Date))
+      .range([0, innerWidth]);
+
+    const y = d3.scaleLinear()
+      .domain([
+        0,
+        d3.max(tickers, t => d3.max(dataThrough2021, d => +d[t])) * 1.1
+      ])
+      .range([innerHeight, 0]);
+
+    g.append("g")
+      .attr("transform", `translate(0,${innerHeight})`)
+      .call(d3.axisBottom(x));
+
+    g.append("g")
+      .call(d3.axisLeft(y));
+
+    const tickerGroups = g.selectAll(".line-group")
+      .data(tickers)
+      .enter()
+      .append("g")
+      .attr("class", "line-group");
+
+    tickerGroups.each(function(ticker) {
+      const group = d3.select(this);
+      const filtered = filteredData.filter(d => d.Date && d[ticker] != null && !isNaN(+d[ticker]));
+      if (filtered.length < 2) return;
+
+      const line = d3.line()
+        .x(d => x(d.Date))
+        .y(d => y(+d[ticker]));
+
+      group.append("path")
+        .datum(filtered)
+        .attr("class", `line-${ticker}`)
+        .attr("fill", "none")
+        .attr("stroke", colors(ticker))
+        .attr("stroke-width", selectedTicker === "ALL" || selectedTicker === ticker ? 2.5 : 1)
+        .attr("opacity", selectedTicker === "ALL" || selectedTicker === ticker ? 1 : 0.2)
+        .attr("d", line);
+
+      group.selectAll(`.dot-${ticker}`)
+        .data(filtered)
+        .enter()
+        .append("circle")
+        .attr("class", `dot-${ticker}`)
+        .attr("cx", d => x(d.Date))
+        .attr("cy", d => y(+d[ticker]))
+        .attr("r", 4)
+        .attr("fill", colors(ticker))
+        .attr("opacity", selectedTicker === "ALL" || selectedTicker === ticker ? 1 : 0.2)
+        .on("mouseover", (event, d) => {
+          tooltip.style("display", "block")
+            .html(`<strong>${ticker}</strong><br>${d.Date.toDateString()}<br>$${+d[ticker].toFixed(2)}`);
+        })
+        .on("mousemove", event => {
+          tooltip.style("left", (event.pageX + 10) + "px")
+            .style("top", (event.pageY - 20) + "px");
+        })
+        .on("mouseout", () => tooltip.style("display", "none"));
+    });
+
+    g.selectAll(".label")
+      .data(tickers)
+      .enter()
+      .append("text")
+      .attr("x", innerWidth + 10)
+      .attr("y", (d, i) => 20 + i * 20)
+      .text(d => d)
+      .style("fill", d => colors(d))
+      .style("opacity", d => selectedTicker === "ALL" || selectedTicker === d ? 1 : 0.2)
+      .attr("class", "annotation");
+
+    const sceneTitles = [
+      "Pre-COVID Growth (2019)",
+      "COVID Market Crash (2019 – Apr 2020)",
+      "Market Recovery (2019 – 2021)"
+    ];
+
+    const sceneAnnotations = [
+      [
+        "Strong growth across all tech stocks",
+        "Growth was generally consistent up until this point",
+        "Market optimism throughout 2019"
+      ],
+      [
+        "March 2020: Market crash from pandemic",
+        "All stocks hit major lows",
+        "Tech stocks were particularly affected as well"
+      ],
+      [
+        "Recovery started by April 2020",
+        "Tech stocks reached new highs",
+        "2021 marked peak performance years for these stocks"
+      ]
+    ];
+
+    g.append("text")
+      .attr("x", 10)
+      .attr("y", 20)
+      .text(sceneTitles[index])
+      .style("font-size", "16px")
+      .style("font-weight", "bold")
+      .attr("class", "scene-title");
+
+    g.selectAll(".scene-annotation")
+      .data(sceneAnnotations[index])
+      .enter()
+      .append("text")
+      .attr("class", "scene-annotation")
+      .attr("x", 10)
+      .attr("y", (d, i) => 45 + i * 15)
+      .text(d => d)
+      .style("font-size", "12px")
+      .style("font-style", "italic")
+      .style("fill", "#666");
+
+    if (index === 1) {
+      const crashDate = parseDate("2020-03-20");
+      if (filteredData.some(d => Math.abs(d.Date - crashDate) < 7 * 24 * 60 * 60 * 1000)) {
+        g.append("line")
+          .attr("x1", x(crashDate))
+          .attr("x2", x(crashDate))
+          .attr("y1", 0)
+          .attr("y2", innerHeight)
+          .attr("stroke", "red")
+          .attr("stroke-width", 2)
+          .attr("stroke-dasharray", "4,4")
+          .attr("opacity", 0.7);
+
+        g.append("text")
+          .attr("x", x(crashDate) + 5)
+          .attr("y", 50)
+          .text("Market Bottom")
+          .style("font-size", "10px")
+          .style("font-weight", "bold")
+          .style("fill", "red");
+      }
+    }
+  }
+
+  d3.selectAll(".scene-button").on("click", function () {
+    currentSceneIndex = +d3.select(this).attr("data-scene");
+    renderScene(currentSceneIndex);
+  });
+
+  d3.json("major-tech-scenes.json").then(json => {
+    sceneData = [json.scene1];
+    renderScene(currentSceneIndex);
+  });
+</script>
+</body>
+</html>
